@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
+<!-- saved from url=(0066)file:///C:/Users/adamk/Downloads/OI_WaterlineHeight_Updater_6.html -->
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OI | HIPS WaterlineHeight Updater</title>
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&family=Montserrat:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+<link href="./OI _ HIPS WaterlineHeight Updater7_files/css2" rel="stylesheet">
 <!-- SheetJS loaded dynamically with fallback -->
 <style>
   :root {
@@ -675,17 +675,17 @@
     <!-- OI Brand Mark: arc/wave over a circle, teal-to-blue gradient -->
     <svg class="oi-mark" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <linearGradient id="g1" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#00c2cc"/>
-          <stop offset="100%" stop-color="#0055a0"/>
-        </linearGradient>
+        <lineargradient id="g1" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#00c2cc"></stop>
+          <stop offset="100%" stop-color="#0055a0"></stop>
+        </lineargradient>
       </defs>
       <!-- Outer ring -->
-      <circle cx="22" cy="22" r="20" stroke="url(#g1)" stroke-width="2.5" fill="none"/>
+      <circle cx="22" cy="22" r="20" stroke="url(#g1)" stroke-width="2.5" fill="none"></circle>
       <!-- Inner wave arc — stylised OI mark -->
-      <path d="M8 22 Q14 12 22 22 Q30 32 36 22" stroke="url(#g1)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+      <path d="M8 22 Q14 12 22 22 Q30 32 36 22" stroke="url(#g1)" stroke-width="2.5" stroke-linecap="round" fill="none"></path>
       <!-- Small dot -->
-      <circle cx="22" cy="22" r="2.5" fill="url(#g1)"/>
+      <circle cx="22" cy="22" r="2.5" fill="url(#g1)"></circle>
     </svg>
 
     <div class="oi-wordmark">
@@ -790,8 +790,8 @@
 
   <!-- RUN -->
   <div class="run-section">
-    <button class="run-btn" id="runBtn" disabled>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+    <button class="run-btn" id="runBtn" disabled="">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
       Generate &amp; Replace WaterlineHeight Block
     </button>
   </div>
@@ -874,60 +874,142 @@ function bindDrop(zoneId, inputId, handler){
 bindDrop('xlsxZone','xlsxInput', handleXlsx);
 bindDrop('vesselZone','vesselInput', handleVessel);
 
-// ══════ Self-contained XLSX parser (no CDN dependency) ══════
-// XLSX files are ZIP archives. We unzip using the DecompressionStream API
-// (available in all modern browsers) then parse the shared strings + sheet XML.
+// ══════ Self-contained XLSX parser — zero dependencies ══════
+// Pure-JS DEFLATE inflate (raw deflate, no zlib header).
+// Based on the public-domain tinflate algorithm.
 
-async function unzipEntry(zipBytes, filename) {
-  // Parse ZIP central directory to find file offsets
-  const view = new DataView(zipBytes.buffer);
-  const u8   = zipBytes;
-  const len  = u8.length;
+function inflate(data) {
+  const MAXBITS = 15, MAXLCODES = 286, MAXDCODES = 30;
+  let inPos = 0, outBuf = [], bitBuf = 0, bitCnt = 0;
 
-  // Scan for local file headers (PK\x03\x04)
+  function bits(need) {
+    let val = bitBuf;
+    while (bitCnt < need) {
+      if (inPos >= data.length) throw new Error('inflate: premature end');
+      val |= data[inPos++] << bitCnt;
+      bitCnt += 8;
+    }
+    bitBuf = val >> need;
+    bitCnt -= need;
+    return val & ((1 << need) - 1);
+  }
+
+  function stored() {
+    bitBuf = 0; bitCnt = 0;
+    const len = data[inPos] | (data[inPos+1] << 8); inPos += 4;
+    for (let i = 0; i < len; i++) outBuf.push(data[inPos++]);
+  }
+
+  function decode(counts, symbols) {
+    let len = 0, code = 0, first = 0, index = 0;
+    for (let i = 1; i <= MAXBITS; i++) {
+      code |= bits(1); len++;
+      const count = counts[i];
+      if (code - count < first) return symbols[index + (code - first)];
+      index += count; first = (first + count) << 1; code <<= 1;
+    }
+    throw new Error('inflate: invalid code');
+  }
+
+  function construct(lengths, n) {
+    const counts = new Array(MAXBITS+1).fill(0);
+    for (let i = 0; i < n; i++) counts[lengths[i]]++;
+    counts[0] = 0;
+    const offsets = new Array(MAXBITS+1).fill(0);
+    for (let i = 1; i <= MAXBITS; i++) offsets[i] = offsets[i-1] + counts[i-1];
+    const symbols = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) if (lengths[i]) symbols[offsets[lengths[i]]++] = i;
+    return { counts, symbols };
+  }
+
+  const LENS   = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  const LEXT   = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  const DISTS  = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  const DEXT   = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  const CLEN_ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+  function fixed() {
+    const llen = new Array(MAXLCODES).fill(0);
+    for (let i=0;i<144;i++) llen[i]=8;
+    for (let i=144;i<256;i++) llen[i]=9;
+    for (let i=256;i<280;i++) llen[i]=7;
+    for (let i=280;i<MAXLCODES;i++) llen[i]=8;
+    const dlen = new Array(MAXDCODES).fill(5);
+    return { lt: construct(llen, MAXLCODES), dt: construct(dlen, MAXDCODES) };
+  }
+
+  function dynamic() {
+    const nlen = bits(5)+257, ndist = bits(5)+1, ncode = bits(4)+4;
+    const clen = new Array(19).fill(0);
+    for (let i=0;i<ncode;i++) clen[CLEN_ORDER[i]] = bits(3);
+    const ct = construct(clen, 19);
+    const lengths = new Array(nlen+ndist).fill(0);
+    for (let i=0;i<lengths.length;) {
+      const sym = decode(ct.counts, ct.symbols);
+      if (sym < 16) { lengths[i++] = sym; }
+      else if (sym === 16) { const rep=lengths[i-1]; for(let c=bits(2)+3;c--;) lengths[i++]=rep; }
+      else if (sym === 17) { for(let c=bits(3)+3;c--;) lengths[i++]=0; }
+      else { for(let c=bits(7)+11;c--;) lengths[i++]=0; }
+    }
+    return {
+      lt: construct(lengths.slice(0,nlen), nlen),
+      dt: construct(lengths.slice(nlen), ndist)
+    };
+  }
+
+  function codes(lt, dt) {
+    while (true) {
+      const sym = decode(lt.counts, lt.symbols);
+      if (sym < 256) { outBuf.push(sym); }
+      else if (sym === 256) { break; }
+      else {
+        const li = sym - 257;
+        let len  = LENS[li] + bits(LEXT[li]);
+        const di = decode(dt.counts, dt.symbols);
+        let dist = DISTS[di] + bits(DEXT[di]);
+        while (len--) { outBuf.push(outBuf[outBuf.length - dist]); }
+      }
+    }
+  }
+
+  let last = 0;
+  while (!last) {
+    last = bits(1);
+    const type = bits(2);
+    if (type === 0) stored();
+    else if (type === 1) { const {lt,dt}=fixed();   codes(lt,dt); }
+    else if (type === 2) { const {lt,dt}=dynamic(); codes(lt,dt); }
+    else throw new Error('inflate: invalid block type');
+  }
+  return new Uint8Array(outBuf);
+}
+
+// ── ZIP reader ──
+function unzipAll(u8) {
+  const view = new DataView(u8.buffer, u8.byteOffset);
   const files = {};
   let i = 0;
-  while (i < len - 4) {
+  while (i < u8.length - 4) {
     if (u8[i]===0x50 && u8[i+1]===0x4B && u8[i+2]===0x03 && u8[i+3]===0x04) {
-      const comp    = view.getUint16(i+8,  true); // compression method
-      const csize   = view.getUint32(i+18, true); // compressed size
-      const fnLen   = view.getUint16(i+26, true);
-      const exLen   = view.getUint16(i+28, true);
-      const fname   = new TextDecoder().decode(u8.slice(i+30, i+30+fnLen));
-      const dataOff = i + 30 + fnLen + exLen;
-      files[fname]  = { comp, csize, dataOff };
-      i = dataOff + csize;
+      const comp  = view.getUint16(i+8,  true);
+      const csize = view.getUint32(i+18, true);
+      const usize = view.getUint32(i+22, true);
+      const fnLen = view.getUint16(i+26, true);
+      const exLen = view.getUint16(i+28, true);
+      const fname = new TextDecoder().decode(u8.slice(i+30, i+30+fnLen));
+      const off   = i + 30 + fnLen + exLen;
+      const raw   = u8.slice(off, off + csize);
+      files[fname] = comp === 8 ? inflate(raw) : raw;
+      i = off + csize;
     } else { i++; }
   }
+  return files;
+}
 
-  const entry = files[filename];
-  if (!entry) return null;
-
-  const compressed = u8.slice(entry.dataOff, entry.dataOff + entry.csize);
-
-  if (entry.comp === 0) {
-    // Stored (no compression)
-    return new TextDecoder().decode(compressed);
-  } else if (entry.comp === 8) {
-    // Deflate — use DecompressionStream
-    const ds     = new DecompressionStream('raw');
-    const writer = ds.writable.getWriter();
-    const reader = ds.readable.getReader();
-    writer.write(compressed);
-    writer.close();
-    const chunks = [];
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
-    const total = chunks.reduce((s,c) => s + c.length, 0);
-    const out   = new Uint8Array(total);
-    let off = 0;
-    for (const c of chunks) { out.set(c, off); off += c.length; }
-    return new TextDecoder().decode(out);
-  }
-  return null;
+function unzipEntry(files, name) {
+  const data = files[name];
+  if (!data) return null;
+  return new TextDecoder().decode(data);
 }
 
 function parseSharedStrings(xml) {
@@ -980,16 +1062,17 @@ function colIndex(col) {
 }
 
 async function parseXlsxFile(file) {
-  const buf  = await file.arrayBuffer();
-  const u8   = new Uint8Array(buf);
+  const buf   = await file.arrayBuffer();
+  const u8    = new Uint8Array(buf);
+  const files = unzipAll(u8);
 
   // Get shared strings (may not exist if all inline)
   let sharedStrings = [];
-  const ssXml = await unzipEntry(u8, 'xl/sharedStrings.xml');
+  const ssXml = unzipEntry(files, 'xl/sharedStrings.xml');
   if (ssXml) sharedStrings = parseSharedStrings(ssXml);
 
   // Get first sheet
-  const sheetXml = await unzipEntry(u8, 'xl/worksheets/sheet1.xml');
+  const sheetXml = unzipEntry(files, 'xl/worksheets/sheet1.xml');
   if (!sheetXml) throw new Error('Cannot find sheet1.xml in xlsx');
 
   const rawRows = parseSheetXml(sheetXml, sharedStrings);
@@ -1233,5 +1316,6 @@ function run(){
   out.scrollIntoView({behavior:'smooth', block:'start'});
 }
 </script>
-</body>
-</html>
+
+
+</body></html>
