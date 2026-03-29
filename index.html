@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<!-- saved from url=(0066)file:///C:/Users/adamk/Downloads/OI_WaterlineHeight_Updater_3.html -->
-<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-
+<html lang="en">
+<head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OI | HIPS WaterlineHeight Updater</title>
-<link href="./OI _ HIPS WaterlineHeight Updater_files/css2" rel="stylesheet">
-<script src="./OI _ HIPS WaterlineHeight Updater_files/xlsx.full.min.js.download"></script>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&family=Montserrat:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+<!-- SheetJS loaded dynamically with fallback -->
 <style>
   :root {
     --oi-navy:   #0a1628;
@@ -675,17 +675,17 @@
     <!-- OI Brand Mark: arc/wave over a circle, teal-to-blue gradient -->
     <svg class="oi-mark" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <lineargradient id="g1" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#00c2cc"></stop>
-          <stop offset="100%" stop-color="#0055a0"></stop>
-        </lineargradient>
+        <linearGradient id="g1" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#00c2cc"/>
+          <stop offset="100%" stop-color="#0055a0"/>
+        </linearGradient>
       </defs>
       <!-- Outer ring -->
-      <circle cx="22" cy="22" r="20" stroke="url(#g1)" stroke-width="2.5" fill="none"></circle>
+      <circle cx="22" cy="22" r="20" stroke="url(#g1)" stroke-width="2.5" fill="none"/>
       <!-- Inner wave arc — stylised OI mark -->
-      <path d="M8 22 Q14 12 22 22 Q30 32 36 22" stroke="url(#g1)" stroke-width="2.5" stroke-linecap="round" fill="none"></path>
+      <path d="M8 22 Q14 12 22 22 Q30 32 36 22" stroke="url(#g1)" stroke-width="2.5" stroke-linecap="round" fill="none"/>
       <!-- Small dot -->
-      <circle cx="22" cy="22" r="2.5" fill="url(#g1)"></circle>
+      <circle cx="22" cy="22" r="2.5" fill="url(#g1)"/>
     </svg>
 
     <div class="oi-wordmark">
@@ -790,8 +790,8 @@
 
   <!-- RUN -->
   <div class="run-section">
-    <button class="run-btn" id="runBtn" disabled="">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+    <button class="run-btn" id="runBtn" disabled>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
       Generate &amp; Replace WaterlineHeight Block
     </button>
   </div>
@@ -874,28 +874,161 @@ function bindDrop(zoneId, inputId, handler){
 bindDrop('xlsxZone','xlsxInput', handleXlsx);
 bindDrop('vesselZone','vesselInput', handleVessel);
 
-// ══════ Parse Excel ══════
+// ══════ Self-contained XLSX parser (no CDN dependency) ══════
+// XLSX files are ZIP archives. We unzip using the DecompressionStream API
+// (available in all modern browsers) then parse the shared strings + sheet XML.
+
+async function unzipEntry(zipBytes, filename) {
+  // Parse ZIP central directory to find file offsets
+  const view = new DataView(zipBytes.buffer);
+  const u8   = zipBytes;
+  const len  = u8.length;
+
+  // Scan for local file headers (PK\x03\x04)
+  const files = {};
+  let i = 0;
+  while (i < len - 4) {
+    if (u8[i]===0x50 && u8[i+1]===0x4B && u8[i+2]===0x03 && u8[i+3]===0x04) {
+      const comp    = view.getUint16(i+8,  true); // compression method
+      const csize   = view.getUint32(i+18, true); // compressed size
+      const fnLen   = view.getUint16(i+26, true);
+      const exLen   = view.getUint16(i+28, true);
+      const fname   = new TextDecoder().decode(u8.slice(i+30, i+30+fnLen));
+      const dataOff = i + 30 + fnLen + exLen;
+      files[fname]  = { comp, csize, dataOff };
+      i = dataOff + csize;
+    } else { i++; }
+  }
+
+  const entry = files[filename];
+  if (!entry) return null;
+
+  const compressed = u8.slice(entry.dataOff, entry.dataOff + entry.csize);
+
+  if (entry.comp === 0) {
+    // Stored (no compression)
+    return new TextDecoder().decode(compressed);
+  } else if (entry.comp === 8) {
+    // Deflate — use DecompressionStream
+    const ds     = new DecompressionStream('raw');
+    const writer = ds.writable.getWriter();
+    const reader = ds.readable.getReader();
+    writer.write(compressed);
+    writer.close();
+    const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const total = chunks.reduce((s,c) => s + c.length, 0);
+    const out   = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return new TextDecoder().decode(out);
+  }
+  return null;
+}
+
+function parseSharedStrings(xml) {
+  const strs = [];
+  const re = /<si>([\s\S]*?)<\/si>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const tRe = /<t[^>]*>([^<]*)<\/t>/g;
+    let tm, val = '';
+    while ((tm = tRe.exec(m[1])) !== null) val += tm[1];
+    strs.push(val);
+  }
+  return strs;
+}
+
+function parseSheetXml(xml, sharedStrings) {
+  // Extract all rows
+  const rows = [];
+  const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g;
+  let rowM;
+  while ((rowM = rowRe.exec(xml)) !== null) {
+    const cells = [];
+    const cellRe = /<c ([^>]*)>([\s\S]*?)<\/c>/g;
+    let cellM;
+    while ((cellM = cellRe.exec(rowM[1])) !== null) {
+      const attrs = cellM[1];
+      const inner = cellM[2];
+      const tMatch = attrs.match(/t="([^"]*)"/);
+      const rMatch = attrs.match(/r="([A-Z]+)(\d+)"/);
+      const vMatch = inner.match(/<v>([^<]*)<\/v>/);
+      const col = rMatch ? rMatch[1] : null;
+      let val = vMatch ? vMatch[1] : null;
+      if (tMatch && tMatch[1] === 's' && val !== null) {
+        val = sharedStrings[parseInt(val)] ?? val;
+      } else if (val !== null && !isNaN(val)) {
+        val = parseFloat(val);
+      }
+      if (col) cells.push({ col, val });
+    }
+    rows.push(cells);
+  }
+  return rows;
+}
+
+function colIndex(col) {
+  // A=0, B=1, C=2 etc.
+  let n = 0;
+  for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+async function parseXlsxFile(file) {
+  const buf  = await file.arrayBuffer();
+  const u8   = new Uint8Array(buf);
+
+  // Get shared strings (may not exist if all inline)
+  let sharedStrings = [];
+  const ssXml = await unzipEntry(u8, 'xl/sharedStrings.xml');
+  if (ssXml) sharedStrings = parseSharedStrings(ssXml);
+
+  // Get first sheet
+  const sheetXml = await unzipEntry(u8, 'xl/worksheets/sheet1.xml');
+  if (!sheetXml) throw new Error('Cannot find sheet1.xml in xlsx');
+
+  const rawRows = parseSheetXml(sheetXml, sharedStrings);
+
+  // Convert to [{doy, time, draft}]
+  const rows = []; const errs = [];
+  for (let i = 0; i < rawRows.length; i++) {
+    const cells = rawRows[i];
+    const byCol = {};
+    for (const c of cells) byCol[colIndex(c.col)] = c.val;
+
+    const a = byCol[0], b = byCol[1], c2 = byCol[2];
+    if (a == null && b == null && c2 == null) continue;
+    if (typeof a === 'string' && /year|doy|date/i.test(a)) continue; // header
+
+    if (a == null || b == null || c2 == null) {
+      errs.push(`Row ${i+1}: blank cell — skipped`); continue;
+    }
+
+    const doy  = String(a).trim();
+    const time = normaliseTime(b);
+    if (!time) { errs.push(`Row ${i+1}: unrecognised time "${b}" — skipped`); continue; }
+
+    const draft = parseFloat(c2);
+    if (isNaN(draft)) { errs.push(`Row ${i+1}: non-numeric draft "${c2}" — skipped`); continue; }
+
+    rows.push({ doy, time, draft: Math.abs(draft) });
+  }
+  return { rows, errs };
+}
+
+// ══════ Handle Excel upload ══════
 async function handleXlsx(file){
   xlsxFn = file.name;
   try {
-    const buf  = await file.arrayBuffer();
-    const wb   = XLSX.read(new Uint8Array(buf), {type:'array', raw:true});
-    const ws   = wb.Sheets[wb.SheetNames[0]];
-    const raw  = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:null});
+    const { rows, errs } = await parseXlsxFile(file);
+    errs.forEach(e => console.warn(e));
 
-    const rows = []; const errs = [];
-    for(let i=0;i<raw.length;i++){
-      const [a,b,c] = raw[i] || [];
-      if(a==null && b==null && c==null) continue;
-      if(typeof a==='string' && /year|doy|date/i.test(a)) continue; // header
-      if(a==null||b==null||c==null){ errs.push(`Row ${i+1}: blank cell — skipped`); continue; }
-      const doy  = String(a).trim();
-      const time = normaliseTime(b);
-      if(!time){ errs.push(`Row ${i+1}: unrecognised time "${b}" — skipped`); continue; }
-      const draft = parseFloat(c);
-      if(isNaN(draft)){ errs.push(`Row ${i+1}: non-numeric draft "${c}" — skipped`); continue; }
-      rows.push({doy, time, draft: Math.abs(draft)});
-    }
+    if (rows.length === 0) throw new Error('No data rows found. Check the file has data in columns A, B, C.');
 
     xlsxRows = rows;
 
@@ -919,9 +1052,12 @@ async function handleXlsx(file){
     if(rows.length > 7) tbody.innerHTML += `<tr class="more-row"><td colspan="4">…and ${rows.length-7} more rows</td></tr>`;
     document.getElementById('xlsxPreviewWrap').style.display = 'block';
 
-    errs.forEach(e => console.warn(e));
     checkReady();
-  } catch(e){ alert('Excel parse error: '+e.message); xlsxRows=null; }
+  } catch(e) {
+    alert('Excel parse error: ' + e.message);
+    console.error(e);
+    xlsxRows = null;
+  }
 }
 
 // ══════ Load vessel ══════
@@ -1097,6 +1233,5 @@ function run(){
   out.scrollIntoView({behavior:'smooth', block:'start'});
 }
 </script>
-
-
-</body></html>
+</body>
+</html>
